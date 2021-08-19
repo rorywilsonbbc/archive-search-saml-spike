@@ -1,0 +1,26 @@
+{
+  "name": "archive-search-saml-spike",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "generate": "node script.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rorywilsonbbc/archive-search-saml-spike.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/rorywilsonbbc/archive-search-saml-spike/issues"
+  },
+  "homepage": "https://github.com/rorywilsonbbc/archive-search-saml-spike#readme",
+  "dependencies": {
+    "escape-html": "^1.0.3",
+    "node-forge": "^0.10.0",
+    "xml-crypto": "^1.5.4",
+    "xmldom": "^0.6.0",
+    "xpath": "0.0.32"
+  }
+}

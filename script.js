@@ -1,66 +1,87 @@
-const SignedXml = require("xml-crypto").SignedXml;
-const fs = require("fs");
-const forge = require("node-forge");
-const util = require("util");
-var xmlenc = require("./xml-encrypt");
-var utils   = require('./utils');
+const axios = require('axios');
+const getSamlToken = require('./get-saml').getSamlToken;
 
-function GetKeyInfo(certPath) {
-  this.getKeyInfo =  () => {
-    const cert = fs.readFileSync(certPath);
-    const certificate = forge.pki.certificateFromPem(cert);
-    const commonName = certificate.issuer.attributes.find(
-      (a) => a.name === "commonName"
-    ).value;
-
-    return utils.renderTemplate('signedkeyinfo', { commonName, serialNumber: utils.getSerialNumber(certificate) });
-  };
-}
-
-const getBaseXML = (pid) => {
-  const before = new Date().toISOString();
-  const after = new Date(new Date().setDate(new Date().getDate() + 7)).toISOString();
-  return utils.renderTemplate('base', { pid, before, after });
-} 
-
-const getSignedXML = (xml) => {
-  const sig = new SignedXml();
-  sig.keyInfoProvider = new GetKeyInfo("./certs/public.pem");
-  sig.signingKey = fs.readFileSync("./certs/private.pem");
-  sig.addReference(
-    "//*[@ID='root']",
-    [
-      "http://www.w3.org/2000/09/xmldsig#enveloped-signature",
-      "http://www.w3.org/2001/10/xml-exc-c14n#",
-    ],
-    "http://www.w3.org/2001/04/xmlenc#sha256"
-  );
-  sig.signatureAlgorithm = "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256";
-  sig.computeSignature(xml);
-  return sig.getSignedXml();
-} 
-
-const getEncryptedXML = async (xml) => {
-  var options = {
-    pem: fs.readFileSync("./certs/media-selector.crt"),
-    rsa_pub: fs.readFileSync("./certs/media-selector.pem"),
-    encryptionAlgorithm: "http://www.w3.org/2001/04/xmlenc#aes256-cbc",
-    keyEncryptionAlgorithm: "http://www.w3.org/2001/04/xmlenc#rsa-oaep-mgf1p",
-  };
-
-  const encryptXMLPromise = util.promisify(xmlenc.encrypt);
-  return encryptXMLPromise(xml, options);
-}
-
-const getBase64EncodedXML = (xml) => Buffer.from(xml).toString('base64');
+const filterByKey = (key, value) => (element) => element[key] === value;
 
 const run = async () => {
   var args = process.argv.slice(2);
-  const baseXML = getBaseXML(args[0]);
-  const signedXML = getSignedXML(baseXML);
-  const encryptedXML = await getEncryptedXML(signedXML);
-  const token = getBase64EncodedXML(encryptedXML);
+  const vpid = args[0];
+  const token = await getSamlToken(vpid);
 
+  console.log('-------------------------------');
   console.log(token);
-};
+  console.log('-------------------------------');
+
+  const url = `https://av-media-sslgate.live.bbc.co.uk/mediaselector/6/select/version/2.0/mediaset/pc/vpid/${vpid}/format/json`;
+  const mediaSetResult = await axios.get(url, {
+    headers: {'Authorization': `x=${token}`}
+  })
+
+  const mediaSetJson = mediaSetResult.data;
+  console.log('mediaSetJson')
+  console.log(JSON.stringify(mediaSetJson, null, 2));
+
+  const kindJson = mediaSetJson.media.filter(filterByKey('kind', 'audio'));
+  console.log('kindJson')
+  console.log(JSON.stringify(kindJson, null, 2));
+
+  const bitrateJson = kindJson.find(filterByKey('bitrate', '128'));
+  console.log('bitrateJson')
+  console.log(JSON.stringify(bitrateJson, null, 2));
+
+  const connectionJson = bitrateJson.connection.filter(filterByKey('protocol', 'https'));
+  console.log('connectionJson')
+  console.log(JSON.stringify(connectionJson, null, 2));
+
+  // Discard connections with a value of -1
+  const availableConnections = connectionJson.filter(({ dpw }) => dpw !== '-1');
+  console.log('availableConnections')
+  console.log(JSON.stringify(availableConnections, null, 2));
+
+  // Missing dpw values MUST be interpreted as if present with a value of 0
+ 
+  // Cast invalid dpw values to 0 (anything)
+  // Invalid dpws (including outside the range -1 to 100, and values which cannot be converted to an integer) MUST be interpreted as if present with a value of 0
+
+  const mappedConnections = availableConnections.map((connection) => {
+    const parsedString = connection.dpw ? parseInt(connection.dpw, 10) : 0;
+    const integer = Number.isNaN(parsedString) ? 0 : parsedString
+    const dpw = integer > 0 && integer <= 100 ? integer : 0
+
+    return {
+      ...connection,
+      dpw
+    };
+  })
+
+  const weightedConnections = mappedConnections.filter(({ dpw }) => dpw >= 1 && dpw <= 100);
+  console.log('weightedConnections')
+  console.log(JSON.stringify(weightedConnections, null, 2));
+
+  const totalWeight = weightedConnections.reduce((acc, { dpw }) => acc + dpw, 0);
+  console.log('totalWeight', totalWeight);
+
+  let chosenConnection = null;
+
+  if (weightedConnections.length) {
+    while (!chosenConnection) {
+      chosenConnection = weightedConnections.find(({ dpw }) => {
+        const randomWeight = Math.random() * totalWeight;
+        return randomWeight < dpw;
+      });
+    }
+  }
+  else {
+    chosenConnection = mappedConnections.find(({ dpw }) => dpw === 0);
+  }
+ 
+  console.log('chosenConnection')
+  console.log(chosenConnection);
+
+
+}
+
+
+
+
 run();
